@@ -1,4 +1,4 @@
-# Rutas en Tiempo Real — Infraestructura
+# go-tacna — Infraestructura
 
 Todo lo necesario para **instalar y ejecutar el sistema en servidores**, y también para levantarlo en tu computadora.
 
@@ -6,51 +6,74 @@ Todo lo necesario para **instalar y ejecutar el sistema en servidores**, y tambi
 
 ---
 
-## ⚠️ Estado actual
+## Estado actual
 
-**Este repositorio está vacío.** La infraestructura vive hoy en el monorepo `rutas-en-tiempo-real-frontend`:
+La tarea **T002** agrega un entorno local en `docker-compose.yml`, con PostgreSQL 16/PostGIS, Laravel y Node.js. El Compose ampliado añade el frontend React/Vite y un gateway Nginx. Los archivos de Docker, manifiestos K3s y herramientas de operación están en este repositorio.
 
-| Contenido | Ruta actual | Estado |
-|---|---|---|
-| Docker Compose local | `docker/docker-compose.yml` | funcional, con errores (ver abajo) |
-| Docker Compose producción | `docker/docker-compose.prod.yml` | funcional |
-| Proxy Nginx | `deploy/nginx/default.conf` | funcional |
-| Scripts de despliegue | `deploy/scripts/deploy.sh`, `certbot.sh` | funcionales |
-| Despliegue desde CI | `.github/workflows/deploy.yml` | funcional |
-| **k3s, Kustomize, Traefik** | — | **no existen todavía** |
+| Componente | Estado local |
+|---|---|
+| PostgreSQL 16 + PostGIS | Servicio Compose con volumen y healthcheck |
+| Laravel Backend Core | Se monta desde el repo hermano `../go-tacna-backend/gotacna-backend-core`; espera PostgreSQL, instala Composer, migra, siembra una vez y expone `/up` |
+| Node.js / Socket.IO | Se monta desde el repo hermano `../go-tacna-backend/go-tacna-location-service`; si no hay script `npm start`, usa un bootstrap temporal de salud/conexión Socket.IO alojado aquí |
+| Frontend React/Vite | Build estático multi-stage servido por Nginx interno; las URLs Vite se fijan durante el build |
+| API Gateway | Nginx enruta `/api/` a Laravel, `/socket.io/` a Node y el resto al frontend; publica solo `127.0.0.1:8001` |
+| K3s | Scaffold Kustomize en [`k8s/`](k8s/); requiere imágenes publicadas y Secret creado fuera de Git |
 
-Este README describe lo que **ya funciona** y, en la última sección, el **diseño objetivo** de producción.
+El servicio Location Service actual aún no tiene código de servidor ni script `start`. Por eso el bootstrap de infraestructura solo permite comprobar que Node y Socket.IO arrancan; no implementa GPS, eventos de negocio ni ETA. Cuando el servicio real incluya `npm start`, el contenedor ejecutará ese comando en lugar del bootstrap.
 
----
+El seeder Laravel actual crea el usuario de prueba `test@example.com`; todavía no hay modelos, migraciones ni seeders para rutas o micros. Las credenciales y el `APP_KEY` de ejemplo son exclusivamente para desarrollo local.
 
-## 1. Dos entornos, un solo Compose
+## Entorno local T002
 
-El archivo `docker-compose.yml` es la base. `docker-compose.prod.yml` se **sobrepone** encima para cambiar solo lo que difiere en producción. Así no se duplica la definición de los servicios.
+Requisito: Docker Desktop con Docker Compose v2. Desde esta carpeta, el comando de inicialización es:
 
 ```bash
-# Desarrollo local: solo el compose base
-docker compose --env-file .env -f docker/docker-compose.yml up --build
-
-# Producción: base + override
-docker compose --env-file .env \
-  -f docker/docker-compose.yml \
-  -f docker/docker-compose.prod.yml up -d --build
+docker compose up -d --build --wait
 ```
 
-El override es deliberadamente corto: `APP_ENV=production`, `APP_DEBUG=false`, `NODE_ENV=production` y publicar el 443.
+Compose usa valores de desarrollo por defecto. Opcionalmente, copia `.env.example` a `.env` para personalizarlos. En Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d --build --wait
+```
+
+El servicio Laravel ejecuta automáticamente `composer install`, `php artisan migrate --force` y el seeder una sola vez por volumen de bootstrap. PostGIS se habilita al inicializar un volumen de base de datos vacío.
+
+Comandos útiles (requieren GNU Make):
+
+```bash
+make setup
+make logs
+make down
+```
+
+Sin Make, se pueden usar directamente los comandos `docker compose` equivalentes. `make clean` elimina los volúmenes y borra la base de datos local.
+
+Los repos hermanos deben existir en las rutas configuradas en `.env.example`. Si tienen otra ubicación, ajusta `BACKEND_PATH`, `LOCATION_PATH` y `FRONTEND_PATH` en `.env`. El build de Vite incorpora sus variables `VITE_*`; al publicar bajo otro dominio, actualízalas y reconstruye la imagen.
+
+Para instalación de K3s, secretos, NodePort, alias de `kubectl` y K9s, sigue la [guía de K3s](k8s/README.md). Esta implementación documenta los pasos pero no instala ni modifica el VPS.
+
+## Referencia de despliegue anterior
+
+Las secciones de producción que siguen provienen de la estructura anterior del monorepo y no describen servicios configurados por el Compose local T002. Confirma rutas, archivos y estado antes de ejecutar esos pasos.
 
 ---
 
-## 2. Servicios
+## 1. Diseño anterior de entornos Compose
 
-| Servicio | Imagen / build | Puerto publicado | Función |
-|---|---|---|---|
-| `db` | `postgis/postgis:16-3.4` | — | PostgreSQL 16 con PostGIS habilitado |
-| `backend` | `../backend` + Dockerfile | — | API Laravel en `:8000` |
-| `realtime` | `../realtime` + Dockerfile | — | Tiempo real Node.js en `:3001` |
-| `web-admin` | `../web-admin` + Dockerfile | — | Web compilada servida en `:4173` |
-| `nginx` | `nginx:1.27-alpine` | `80`, `443` | Único punto de entrada |
-| `certbot` | `certbot/certbot:v2.11.0` | — | Emisión y renovación de certificados |
+El diseño anterior planteaba un Compose base y un override de producción. Esos archivos no están presentes actualmente en este repositorio.
+
+## 2. Servicios del diseño anterior
+
+| Servicio | Función prevista |
+|---|---|
+| `db` | PostgreSQL 16 con PostGIS |
+| `backend` | API Laravel |
+| `realtime` | Tiempo real Node.js |
+| `web-admin` | Web compilada |
+| `nginx` | Proxy inverso |
+| `certbot` | Emisión y renovación de certificados |
 
 **Nginx es el único servicio que publica puertos.** Los demás se comunican por la red interna de Docker, con `expose` en vez de `ports`.
 
@@ -83,8 +106,8 @@ Se define **un solo `.env` en la raíz del proyecto**, que alimenta todos los se
 |---|---|---|
 | `APP_KEY` | — | clave de Laravel (**obligatoria**) |
 | `APP_URL` | `http://localhost` | URL pública de la aplicación |
-| `DB_DATABASE` | `rutatacna` | base de datos |
-| `DB_USERNAME` | `rutatacna` | usuario de PostgreSQL |
+| `DB_DATABASE` | `gotacna` | base de datos |
+| `DB_USERNAME` | `gotacna` | usuario de PostgreSQL |
 | `DB_PASSWORD` | — | clave de PostgreSQL (**obligatoria**) |
 | `JWT_SECRET` | — | **idéntica** en `api/` y `realtime/` (**obligatoria**) |
 | `REALTIME_PORT` | `3001` | puerto del servidor de tiempo real |
@@ -168,7 +191,9 @@ El workflow usa el **environment `production`**, que puede requerir aprobación 
 
 ---
 
-## 6. Diseño objetivo de producción
+## 6. Referencia histórica de Kubernetes
+
+> **No usar esta sección para desplegar.** La guía vigente de K3s está en [`k8s/README.md`](k8s/README.md). El texto que sigue conserva decisiones previas y puede no coincidir con la infraestructura actual.
 
 Lo anterior funciona con **Docker Compose**. Para producción segzde usar **k3s**, un Kubernetes ligero.
 
@@ -244,7 +269,7 @@ docker compose --env-file .env -f docker/docker-compose.yml config --quiet
 docker compose --env-file .env -f docker/docker-compose.yml exec -T nginx nginx -t
 
 # Entrar a PostgreSQL
-docker compose --env-file .env -f docker/docker-compose.yml exec db psql -U rutatacna -d rutatacna
+docker compose --env-file .env -f docker/docker-compose.yml exec db psql -U gotacna -d gotacna
 ```
 
 ---
@@ -287,10 +312,10 @@ docker compose --env-file .env -f docker/docker-compose.yml exec db psql -U ruta
 
 | Repositorio | Propósito |
 |---|---|
-| `rutas-en-tiempo-real-infraestructura` | Este repositorio. Docker, k3s, Traefik y despliegue. |
-| `rutas-en-tiempo-real-backend` | API Laravel y servidor de tiempo real. |
-| `rutas-en-tiempo-real-frontend` | Web pública y panel de administración. |
-| `rutas-en-tiempo-real-movil` | App Android (Pasajero y Modo Conductor). |
-| `rutas-en-tiempo-real-docs` | Informe, requisitos, contratos y cronograma. |
+| `go-tacna-infraestructura` | Este repositorio. Docker, k3s, Traefik y despliegue. |
+| `go-tacna-backend` | API Laravel y servidor de tiempo real. |
+| `go-tacna-frontend` | Web pública y panel de administración. |
+| `go-tacna-movil` | App Android (Pasajero y Modo Conductor). |
+| `go-tacna-docs` | Informe, requisitos, contratos y cronograma. |
 
-Tablero de tareas: [Planificación rutas-en-tiempo-real](https://github.com/orgs/tuChaski/projects/1)
+Tablero de tareas: [Planificación go-tacna](https://github.com/orgs/go-tacna/projects/1)
