@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     libfreetype6-dev \
+    libicu-dev \
     libjpeg62-turbo-dev \
     libonig-dev \
     libpng-dev \
@@ -15,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bcmath \
         exif \
         gd \
+        intl \
         mbstring \
         pcntl \
         pdo_pgsql \
