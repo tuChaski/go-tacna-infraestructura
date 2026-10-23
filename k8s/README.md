@@ -1,6 +1,6 @@
 # K3s: despliegue de Go-Tacna
 
-Estos manifiestos son una base de despliegue, no una instalación ejecutada ni verificada en el VPS. No contienen secretos. El despliegue completo requiere imágenes de backend, frontend y Location Service publicadas en un registry; los valores `REPLACE_WITH_TAG` se deben cambiar por tags existentes antes de aplicar los manifiestos.
+Estos manifiestos son una base de despliegue, no una instalación ejecutada ni verificada en el VPS. No contienen secretos. El despliegue completo requiere imágenes del backend core, del API Gateway Laravel, del frontend y del Location Service publicadas en un registry; los valores `REPLACE_WITH_TAG` se deben cambiar por tags existentes antes de aplicar los manifiestos.
 
 ## Instalar K3s en el VPS
 
@@ -36,9 +36,9 @@ Luego ejecuta `k9s` para inspeccionar pods, servicios y logs.
 
 Antes de desplegar:
 
-1. Construye y publica imágenes versionadas para Laravel, frontend y Location Service en un registry accesible desde el VPS. No uses `latest` para despliegues repetibles.
-2. Sustituye los tres tags `REPLACE_WITH_TAG` en `backend.yaml`, `frontend.yaml` y `websocket.yaml` por las imágenes publicadas. Si el registry es privado, crea también un `imagePullSecret` y asócialo a los Pods.
-3. Crea el namespace y prepara fuera del repositorio un archivo de variables con permisos `0600`. Debe incluir `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, `APP_KEY` y `JWT_SECRET`. No guardes ese archivo en Git.
+1. Construye y publica imágenes versionadas para el backend core, el API Gateway Laravel, el frontend y Location Service en un registry accesible desde el VPS. No uses `latest` para despliegues repetibles.
+2. Sustituye los cuatro tags `REPLACE_WITH_TAG` en `backend.yaml`, `gateway.yaml`, `frontend.yaml` y `websocket.yaml` por las imágenes publicadas. Si el registry es privado, crea también un `imagePullSecret` y asócialo a los Pods.
+3. Crea el namespace y prepara fuera del repositorio un archivo de variables con permisos `0600`. Debe incluir `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, `APP_KEY` y `JWT_SECRET`. No guardes ese archivo en Git. Para producción se recomienda una `APP_KEY` distinta para el gateway; si se separa, agrega `GATEWAY_APP_KEY` al Secret y mapéala al `APP_KEY` del Deployment `gateway`.
 
 Ejemplo de creación del Secret usando una ruta protegida del VPS:
 
@@ -62,15 +62,18 @@ sudo k3s kubectl apply -k k8s/
 sudo k3s kubectl -n gotacna get pods,services,pvc
 sudo k3s kubectl -n gotacna rollout status statefulset/postgres
 sudo k3s kubectl -n gotacna rollout status deployment/backend
+sudo k3s kubectl -n gotacna rollout status deployment/gateway
+sudo k3s kubectl -n gotacna rollout status deployment/nginx
 ```
 
-El gateway queda como `NodePort 30081`; configura el Nginx global para pasar el tráfico del dominio a `http://127.0.0.1:30081`. La terminación TLS sigue siendo responsabilidad del Nginx global. Revisa healthchecks, logs y reglas de firewall antes de publicar cambios.
+La entrada pública queda como el Service `nginx` en `NodePort 30081`; configura el Nginx global para pasar el tráfico del dominio a `http://127.0.0.1:30081`. La terminación TLS sigue siendo responsabilidad del Nginx global. El Nginx del host debe enviar `Host`, `X-Forwarded-Host` y `X-Forwarded-Proto https` para que el gateway y el core generen enlaces de paginación con el dominio y esquema públicos. Revisa healthchecks, logs y reglas de firewall antes de publicar cambios.
 
 ## Estado y limitaciones
 
 - PostgreSQL usa una PVC `10Gi` con la clase `local-path` que K3s instala por defecto. Es almacenamiento local del nodo, no alta disponibilidad ni respaldo.
-- El backend necesita una imagen que exponga HTTP en `8000` y `/up`; los manifiestos no construyen ni publican imágenes.
+- El backend y el gateway necesitan imágenes que expongan HTTP en `8000` y `/up`; los manifiestos no construyen ni publican imágenes.
+- El gateway Laravel no usa base de datos: escucha en `8000`, reenvía `/api/v1/*` a `http://backend:8000` y conserva el host/esquema originales mediante los encabezados `X-Forwarded-*`.
 - El frontend debe compilarse con `VITE_API_BASE_URL=/api/v1` y `VITE_WS_URL=https://go-tacna.site` (o el origen público real), ya que Vite incorpora esos valores al bundle durante el build.
 - Location Service aún necesita una imagen ejecutable con `/health`, Socket.IO y el contrato de negocio. El bootstrap de Compose no es una imagen de producción.
-- La configuración de Nginx en `k8s/gateway.yaml` refleja `docker/nginx/default.conf`; mantenlas sincronizadas cuando cambien las rutas.
+- La configuración de Nginx en `k8s/nginx.yaml` refleja `docker/nginx/default.conf`; mantenlas sincronizadas cuando cambien las rutas.
 - Ejecutar `kubectl apply` crea recursos y puede iniciar servicios; estos pasos quedan para el operador del VPS. No se han ejecutado desde esta implementación.

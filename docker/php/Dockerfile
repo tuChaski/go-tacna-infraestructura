@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libonig-dev \
     libpng-dev \
     libpq-dev \
+    libsqlite3-dev \
+    pkg-config \
     unzip \
     zip \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
@@ -20,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mbstring \
         pcntl \
         pdo_pgsql \
+        pdo_sqlite \
         pgsql \
     && rm -rf /var/lib/apt/lists/*
 

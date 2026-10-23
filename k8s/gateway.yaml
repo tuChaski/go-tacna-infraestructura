@@ -1,100 +1,81 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: gateway-nginx
-data:
-  default.conf: |
-    server {
-        listen 80;
-        server_name _;
-
-        location = /healthz {
-            access_log off;
-            default_type text/plain;
-            return 200 "ok\n";
-        }
-
-        location /socket.io/ {
-            proxy_pass http://websocket:3001;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_read_timeout 3600s;
-        }
-
-        location /api/ {
-            proxy_pass http://backend:8000;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-
-        location / {
-            proxy_pass http://frontend:80;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-    }
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api-gateway
+  name: gateway
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: api-gateway
+      app: gateway
   template:
     metadata:
       labels:
-        app: api-gateway
+        app: gateway
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.27-alpine
+        - name: gateway
+          image: ghcr.io/tuchaski/gotacna-api-gateway:REPLACE_WITH_TAG
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
-              containerPort: 80
-          volumeMounts:
-            - name: nginx-config
-              mountPath: /etc/nginx/conf.d/default.conf
-              subPath: default.conf
-              readOnly: true
+              containerPort: 8000
+          env:
+            - name: APP_ENV
+              value: production
+            - name: APP_DEBUG
+              value: "false"
+            - name: APP_URL
+              value: https://go-tacna.site
+            - name: LOG_CHANNEL
+              value: stderr
+            - name: DB_CONNECTION
+              value: sqlite
+            - name: DB_DATABASE
+              value: ":memory:"
+            - name: SESSION_DRIVER
+              value: array
+            - name: CACHE_STORE
+              value: array
+            - name: QUEUE_CONNECTION
+              value: sync
+            - name: CORE_API_URL
+              value: http://backend:8000
+            - name: CORE_API_TIMEOUT
+              value: "30"
+            - name: CORE_API_VERIFY_TLS
+              value: "true"
+            - name: CORS_ALLOWED_ORIGINS
+              value: https://go-tacna.site
+          envFrom:
+            - secretRef:
+                name: gotacna-secrets
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /up
               port: http
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /up
               port: http
             periodSeconds: 20
             timeoutSeconds: 3
-      volumes:
-        - name: nginx-config
-          configMap:
-            name: gateway-nginx
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: api-gateway
+  name: gateway
 spec:
-  type: NodePort
   selector:
-    app: api-gateway
+    app: gateway
   ports:
     - name: http
-      port: 80
+      port: 8000
       targetPort: http
-      nodePort: 30081

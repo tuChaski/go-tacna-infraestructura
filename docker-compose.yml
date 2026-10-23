@@ -25,14 +25,19 @@ services:
   backend:
     build:
       context: ./docker/php
+    image: gotacna-php:local
     restart: unless-stopped
     init: true
     environment:
-      APP_NAME: Go-Tacna
+      APP_ROLE: core
+      APP_NAME: Go-Tacna Core
       APP_ENV: local
       APP_KEY: "${APP_KEY:-base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
       APP_DEBUG: "true"
       APP_URL: ${APP_URL:-http://localhost:8001}
+      APP_LOCALE: es
+      APP_FALLBACK_LOCALE: es
+      APP_FAKER_LOCALE: es_PE
       LOG_CHANNEL: stderr
       DB_CONNECTION: pgsql
       DB_HOST: postgres
@@ -40,9 +45,11 @@ services:
       DB_DATABASE: ${DB_DATABASE:-gotacna_db}
       DB_USERNAME: ${DB_USERNAME:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-local-dev-password}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me-0123456789abcdef0123456789abcdef}
       SESSION_DRIVER: file
       CACHE_STORE: file
       QUEUE_CONNECTION: sync
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8001}
     volumes:
       - type: bind
         source: ${BACKEND_PATH:-../go-tacna-backend/gotacna-backend-core}
@@ -53,6 +60,48 @@ services:
       - gotacna-net
     depends_on:
       postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/up >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  gateway:
+    build:
+      context: ./docker/php
+    image: gotacna-php:local
+    restart: unless-stopped
+    init: true
+    environment:
+      APP_ROLE: gateway
+      APP_NAME: Go-Tacna API Gateway
+      APP_ENV: local
+      APP_KEY: "${GATEWAY_APP_KEY:-base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
+      APP_DEBUG: "true"
+      APP_URL: ${APP_URL:-http://localhost:8001}
+      APP_LOCALE: es
+      APP_FALLBACK_LOCALE: es
+      LOG_CHANNEL: stderr
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+      SESSION_DRIVER: array
+      CACHE_STORE: array
+      QUEUE_CONNECTION: sync
+      CORE_API_URL: http://backend:8000
+      CORE_API_TIMEOUT: ${CORE_API_TIMEOUT:-30}
+      CORE_API_VERIFY_TLS: "false"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8001}
+    volumes:
+      - type: bind
+        source: ${GATEWAY_PATH:-../go-tacna-backend/gotacna-api-gateway}
+        target: /var/www/html
+      - gateway_vendor:/var/www/html/vendor
+    networks:
+      - gotacna-net
+    depends_on:
+      backend:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/up >/dev/null || exit 1"]
@@ -115,7 +164,7 @@ services:
       websocket:
         condition: service_healthy
 
-  api-gateway:
+  nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
@@ -125,7 +174,7 @@ services:
     networks:
       - gotacna-net
     depends_on:
-      backend:
+      gateway:
         condition: service_healthy
       websocket:
         condition: service_healthy
@@ -146,4 +195,5 @@ volumes:
   postgres_data:
   backend_vendor:
   backend_bootstrap:
+  gateway_vendor:
   location_node_modules:

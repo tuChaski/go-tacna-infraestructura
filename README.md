@@ -8,20 +8,21 @@ Todo lo necesario para **instalar y ejecutar el sistema en servidores**, y tambi
 
 ## Estado actual
 
-La tarea **T002** agrega un entorno local en `docker-compose.yml`, con PostgreSQL 16/PostGIS, Laravel y Node.js. El Compose ampliado añade el frontend React/Vite y un gateway Nginx. Los archivos de Docker, manifiestos K3s y herramientas de operación están en este repositorio.
+La tarea **T002** agrega un entorno local en `docker-compose.yml`, con PostgreSQL 16/PostGIS, Laravel y Node.js. El Compose ampliado añade el frontend React/Vite, el API Gateway Laravel y un Nginx de entrada. Los archivos de Docker, manifiestos K3s y herramientas de operación están en este repositorio.
 
 | Componente | Estado local |
 |---|---|
 | PostgreSQL 16 + PostGIS | Servicio Compose con volumen y healthcheck |
 | Laravel Backend Core | Se monta desde el repo hermano `../go-tacna-backend/gotacna-backend-core`; espera PostgreSQL, instala Composer, migra, siembra una vez y expone `/up` |
+| API Gateway Laravel | Se monta desde el repo hermano `../go-tacna-backend/gotacna-api-gateway`; reenvía `/api/v1/*` al core y expone `/up` |
+| Nginx de entrada | Enruta `/api/` al gateway Laravel, `/socket.io/` a Node y el resto al frontend; publica solo `127.0.0.1:8001` |
 | Node.js / Socket.IO | Se monta desde el repo hermano `../go-tacna-backend/go-tacna-location-service`; si no hay script `npm start`, usa un bootstrap temporal de salud/conexión Socket.IO alojado aquí |
 | Frontend React/Vite | Build estático multi-stage servido por Nginx interno; las URLs Vite se fijan durante el build |
-| API Gateway | Nginx enruta `/api/` a Laravel, `/socket.io/` a Node y el resto al frontend; publica solo `127.0.0.1:8001` |
 | K3s | Scaffold Kustomize en [`k8s/`](k8s/); requiere imágenes publicadas y Secret creado fuera de Git |
 
 El servicio Location Service actual aún no tiene código de servidor ni script `start`. Por eso el bootstrap de infraestructura solo permite comprobar que Node y Socket.IO arrancan; no implementa GPS, eventos de negocio ni ETA. Cuando el servicio real incluya `npm start`, el contenedor ejecutará ese comando en lugar del bootstrap.
 
-El seeder Laravel actual crea el usuario de prueba `test@example.com`; todavía no hay modelos, migraciones ni seeders para rutas o micros. Las credenciales y el `APP_KEY` de ejemplo son exclusivamente para desarrollo local.
+El seeder del core carga datos de demostración del ERD actual: empresas, administradores, conductores, pasajero, planes, rutas, micros, posiciones y una suscripción. El administrador general de prueba es `admin@gotacna.pe` / `admin123`. Las credenciales y las claves de ejemplo son exclusivamente para desarrollo local.
 
 ## Entorno local T002
 
@@ -38,7 +39,7 @@ Copy-Item .env.example .env
 docker compose up -d --build --wait
 ```
 
-El servicio Laravel ejecuta automáticamente `composer install`, `php artisan migrate --force` y el seeder una sola vez por volumen de bootstrap. PostGIS se habilita al inicializar un volumen de base de datos vacío.
+El servicio Laravel core ejecuta automáticamente `composer install`, `php artisan migrate --force` y el seeder una sola vez por volumen de bootstrap. El servicio gateway Laravel solo instala dependencias y arranca; no migra ni siembra porque no tiene base de datos propia. PostGIS se habilita al inicializar un volumen de base de datos vacío.
 
 Comandos útiles (requieren GNU Make):
 
@@ -50,7 +51,7 @@ make down
 
 Sin Make, se pueden usar directamente los comandos `docker compose` equivalentes. `make clean` elimina los volúmenes y borra la base de datos local.
 
-Los repos hermanos deben existir en las rutas configuradas en `.env.example`. Si tienen otra ubicación, ajusta `BACKEND_PATH`, `LOCATION_PATH` y `FRONTEND_PATH` en `.env`. El build de Vite incorpora sus variables `VITE_*`; al publicar bajo otro dominio, actualízalas y reconstruye la imagen.
+Los repos hermanos deben existir en las rutas configuradas en `.env.example`. Si tienen otra ubicación, ajusta `BACKEND_PATH`, `GATEWAY_PATH`, `LOCATION_PATH` y `FRONTEND_PATH` en `.env`. El build de Vite incorpora sus variables `VITE_*`; al publicar bajo otro dominio, actualízalas y reconstruye la imagen.
 
 Para instalación de K3s, secretos, NodePort, alias de `kubectl` y K9s, sigue la [guía de K3s](k8s/README.md). Esta implementación documenta los pasos pero no instala ni modifica el VPS.
 
@@ -90,11 +91,11 @@ El diseño anterior planteaba un Compose base y un override de producción. Esos
 | Ruta | Destino |
 |---|---|
 | `/.well-known/acme-challenge/` | `/var/www/certbot` (para Let's Encrypt) |
-| `/api/` | `backend:8000` |
+| `/api/` | `gateway:8000` (gateway Laravel) → `backend:8000` (core) |
 | `/socket.io/` | `realtime:3001` (con `Upgrade` / `Connection: upgrade`) |
 | `/` | `web-admin:4173` |
 
-En `/socket.io/` el `proxy_read_timeout` sube a `3600s`: sin eso, Nginx cortaría las conexiones de los pasajeros.
+En `/socket.io/` el `proxy_read_timeout` sube a `3600s`: sin eso, Nginx cortaría las conexiones de los pasajeros. El Nginx de entrada conserva `Host`, `X-Forwarded-Host` y `X-Forwarded-Proto` para que la paginación del core use el dominio público correcto.
 
 ---
 
@@ -104,14 +105,18 @@ Se define **un solo `.env` en la raíz del proyecto**, que alimenta todos los se
 
 | Variable | Por defecto | Para qué |
 |---|---|---|
-| `APP_KEY` | — | clave de Laravel (**obligatoria**) |
-| `APP_URL` | `http://localhost` | URL pública de la aplicación |
-| `DB_DATABASE` | `gotacna` | base de datos |
-| `DB_USERNAME` | `gotacna` | usuario de PostgreSQL |
+| `APP_KEY` | — | clave del core Laravel (**obligatoria**) |
+| `GATEWAY_APP_KEY` | — | clave del gateway Laravel (**obligatoria**, distinta de `APP_KEY`) |
+| `APP_URL` | `http://localhost:8001` | URL pública de la aplicación |
+| `DB_DATABASE` | `gotacna_db` | base de datos |
+| `DB_USERNAME` | `postgres` | usuario de PostgreSQL |
 | `DB_PASSWORD` | — | clave de PostgreSQL (**obligatoria**) |
-| `JWT_SECRET` | — | **idéntica** en `api/` y `realtime/` (**obligatoria**) |
+| `JWT_SECRET` | — | secreto JWT del core; si el servicio de tiempo real valida tokens, debe compartirlo (**obligatoria**) |
+| `CORE_API_URL` | `http://backend:8000` | URL interna del core usada por el gateway Laravel |
+| `CORE_API_TIMEOUT` | `30` | timeout del proxy del gateway en segundos |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:8001` | orígenes permitidos por la API |
 | `REALTIME_PORT` | `3001` | puerto del servidor de tiempo real |
-| `CORS_ORIGIN` | `http://localhost:5173` | origen permitido del navegador |
+| `CORS_ORIGIN` | `http://localhost:5173` | origen permitido por Socket.IO |
 | `OFFLINE_AFTER_MS` | `120000` | umbral para marcar un micro sin conexión |
 | `HTTP_PORT` | `80` | puerto HTTP |
 | `HTTPS_PORT` | `443` | puerto HTTPS |

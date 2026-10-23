@@ -26,6 +26,8 @@ spec:
               value: "false"
             - name: APP_URL
               value: https://go-tacna.site
+            - name: LOG_CHANNEL
+              value: stderr
             - name: DB_CONNECTION
               value: pgsql
             - name: DB_HOST
@@ -38,6 +40,8 @@ spec:
               value: file
             - name: QUEUE_CONNECTION
               value: sync
+            - name: CORS_ALLOWED_ORIGINS
+              value: https://go-tacna.site
           envFrom:
             - secretRef:
                 name: gotacna-secrets

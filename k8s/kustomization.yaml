@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - postgres.yaml
   - backend.yaml
+  - gateway.yaml
+  - nginx.yaml
   - websocket.yaml
   - frontend.yaml
-  - gateway.yaml
