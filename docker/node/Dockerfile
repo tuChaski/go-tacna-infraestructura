@@ -1,8 +1,5 @@
 FROM node:24-alpine
 
-WORKDIR /opt/gotacna-bootstrap
-
-COPY bootstrap.cjs ./bootstrap.cjs
 COPY entrypoint.sh /usr/local/bin/gotacna-node-entrypoint
 
 RUN chmod +x /usr/local/bin/gotacna-node-entrypoint
